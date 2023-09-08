@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analysis Chat Session</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/main.css" rel="stylesheet">
+    <script src="js/facts-modal.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+
+</head>
+
+<body>
+    <!-- This is a webcomponent that shows interesting facts to the user while they wait out the dreadful gpt-4 latency. It should be seen as an example of how UX and Interaction Design can smooth over rough edges in an imperfect technology, in this case Transformer-based LLMs -->
+    <facts-modal></facts-modal>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top">
+        <div class="container-fluid">
+          <!-- Logo -->
+          <a class="navbar-brand" href="#">
+            <img src="img/lovegpt.png" alt="Logo" width="40"> 
+    LoveGPT
+          </a>
+          <!-- Title -->
+          
+        </div>
+      </nav>
+    <!-- Step 1: User pastes a conversation and submits to the API for scoring-->
+    <div id="intake-screen" class="container clear-topnav">
+              <!-- chat_inputs: Stringified JSON with all the input keys and its values. The value of the key that is defined
+    as chat_input_field will be overwritten by the chat message.
+    chat_input_field: Input key that you want the chat to send the user message with. -->
+
+        <h3>Begin Session</h3>
+        <form id="analyze-form">
+            <div class="mb-3">
+                <label for="conversation" class="form-label">Paste conversation, communication, situation here...</label>
+                <textarea class="form-control" id="conversation" rows="10"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary w-50">Analyze</button>
+        </form>
+        <div class="card mt-5">
+            <div class="card-header text-center">Example Inputs</div>
+            <div class="card-body">
+
+                    <!-- Example 1: Romantic Conflict Over Text -->
+                    <h5>Example 1: Romantic Conflict Over Text</h5>
+                    <pre>
+Anna: I can't believe you didn't tell me about running into your ex yesterday.
+Tom: I didn't think it was a big deal. We just talked for a few minutes.
+Anna: A few minutes can mean a lot. Transparency is important in a relationship.
+Tom: I get it, but you're making it sound like I cheated or something.
+Anna: No, but it makes me question what else you're not telling me.
+Tom: You're overreacting, Anna.
+Anna: Am I? Because it feels like you're being dishonest.
+                    </pre>
+                   <h5>Example 2: A Hurtful Message To / From Partner</h5>
+                   <pre>
+I don't feel the same for you as I did when we started dating. I don't know why this has happened, 
+but I think I should be frank and honest with you. I feel we need to say goodbye to each other. 
+I hope you move on and find the happiness you deserve in life
+                   </pre>
+                    <!-- Example 2: Paraphrased Conflict Over Domestic Chores -->
+                    <h5>Example 3: Paraphrased Conflict Over Domestic Chores</h5>
+                    <pre>
+Alex: You left the dishes in the sink again.
+Taylor: Well, I was planning on doing them after dinner.
+Alex: You always say that, but then you forget, and I end up doing them.
+Taylor: I don't forget, I just get busy.
+Alex: We're both busy. That's why we agreed to share the chores.
+Taylor: I know, I know. But can't you cut me some slack?
+Alex: It's not about slack, it's about responsibility and fairness.
+                    </pre>
+                  
+                    <!-- Example 3: Problematic Situation in the Workplace -->
+                    <h5>Example 4: Problematic Situation in the Workplace</h5>
+                    <pre>
+Sara: Mark, can I talk to you about the Johnson project?
+Mark: Sure, what's up?
+Sara: I noticed you made some changes to the presentation without consulting me.
+Mark: Yeah, I thought it needed a bit more data to back our points.
+Sara: I agree, but I should've been in the loop. I'm the project lead.
+Mark: Oh, I didn't think you'd mind.
+Sara: Well, I do. It's not just about this project; it's about respecting roles and boundaries.
+Mark: I get it, I'll keep that in mind for next time.
+                    </pre>
+                    <h5>Example 5: Awkward Situations (Real or Potential)</h5>
+                    <pre>
+I'm really excited to finally meet you, but I don't know how to tell you 
+that I'm biologically a man even tho I live my life as a woman
+
+Remember that sore throat I was complaining about? 
+Well Doctor Freeman just called and told me that I'm HIV positive...
+
+Sorry but I can't go on that trip to Paris with you. 
+I'm currently awaiting trial for some white collar bullshit at my 
+last startup and the court is holding onto my passport
+                    </pre>
+                    
+                    
+                    <h5>Example 6: Excellent Decision Making</h5>
+                    <pre>
+(Second Date, 2nd bottle of Wine)
+Girl: You should know before we go any further 
+that I'm not really single. I was about to dump my boyfriend back in September 
+but he found out he has a really bad cancer and he's going to die, 
+so I don't know how to tell him
+Me: Oh no that's so terrible... what kind of cancer does he have?
+Girl: Stage 4 Melanoma
+Me: (thinks to self: he's 96% likely to croak in the next 6 months, but
+just to be a gentleman I should ask) well, if he recovers do you want to be with him?
+Girl: Uh... Probably Not
+Me: (decides to take her words at face value because i'm extremely attracted to her)
+Poor guy. Here let me pour your another glass of wine...
+                    </pre>
+            </div>
+            <div class="card-footer text-muted">Don't worry about the precise formatting - as long as it clearly distinguishes between the speakers, you're good to go. Just paste from your favorite messaging app or briefly paraphrase an in-person conversation you'd like to discuss</div>
+        </div>
+        
+    </div>
+
+
+    <!-- Step 2: The analyzed conversation is shown along with annotations and scores... the scored messages can then serve as labeled context to guide the model when the user asks for further insight or seeks advice -->
+    <div id="main-screen" class="container clear-topnav" style="display:none">
+            <!-- Nav tabs -->
+            <ul style="display:none" class="nav nav-tabs bg-secondary fixed-tabs" id="myTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                <a class="nav-link active" id="analyze-tab" data-bs-toggle="tab" href="#analyze" role="tab" aria-controls="analyze" aria-selected="true">Analysis</a>
+                </li>
+                <li class="nav-item" role="presentation">
+                <a class="nav-link" id="advise-tab" data-bs-toggle="tab" href="#advise" role="tab" aria-controls="advise" aria-selected="false">Advice</a>
+                </li>
+                <li class="nav-item" style="display:none" role="presentation">
+                <a class="nav-link" id="therapist-tab" data-bs-toggle="tab" href="#therapist" role="tab" aria-controls="therapist" aria-selected="false">Therapist</a>
+                </li>
+            </ul>
+            
+            <!-- Tab panes -->
+            <div class="tab-content" id="myTabContent">
+                <div class="tab-pane fade show active" id="analyze" role="tabpanel" aria-labelledby="analyze-tab">
+                <!-- Content for Analyze tab here -->
+                    <p>
+                        Welcome to couples therapy. My name is Dr. G the 4th, and I'll be your therapist for today. 
+                        
+                        I have finished evaluating your interaction; please see my comments below. If there's anything you want to discuss, press the Chat button at any time...</p>
+                        
+                        
+                        <p>This detailed analysis of your interaction will help you and your partner to understand how your communications might be perceived by the other person, and can help resolve misunderstandings.</p>
+                        
+                        <p>Some messges may be color coded, to show how you and/or your partner are creating <b class="bg-negative">NEGATIVE</b> or <b class="bg-positive">POSITIVE</b> vibes as you interact</p>
+                    
+                    <div class="card mb-3">
+                        <div class="card-header text-center">
+                            Textual Analysis
+                        </div>
+                        <div class="card-body">
+                            <div id="chat-container">
+                                <!-- The chat messages will be appended here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Content for Advise tab here -->
+                    <p>The next section is a look at the overall relationship with practical tips for improvement.</p> 
+                    <p>Please remember: all I know is the context you've provided, so think carefully before acting on any advice.</p>
+                    
+                    <div class="card mt-3 mb-3">
+                        <div class="card-header text-center">
+                            Thoughts and Advice
+                        </div>
+                        <div class="card-body" id="advice">
+                            Please wait while I finish writing your report
+                        </div>
+                    </div>
+
+                    <p>All done! Hopefully this was helpful. I look forward to chatting with you further about any of these topics. To keep things totally confidential, this report is not stored on LoveGPT servers, so please take a moment to save it by selecting Print -> Save As PDF from your browser</p>
+
+                </div>
+                <div class="tab-pane fade" id="advise" role="tabpanel" aria-labelledby="advise-tab">
+
+                </div>
+                <div class="tab-pane fade" id="therapist" role="tabpanel" aria-labelledby="therapist-tab">
+                <!-- Content for Therapist tab here -->
+
+                <p><br /><br /><br />Click the button to start your interactive therapy session or discuss my analysis in more depth. I am trained in all major schools of individual and family therapy and I've loaded the current session into my memory.</p>
+                    <p>Everything you tell me will be kept strictly confidential and removed from my memory when you close your browser</p>
+                    
+                    <div class="text-center mt-3 chat-toggle">
+                        <button type="button" class="btn btn-primary w-50 text-center">Chat Now</button>
+                    </div>
+
+                </div>
+            </div>
+  
+
+    </div>
+    
+    <div id="chat-container" style="display:none" class="bg-secondary sidebar-container"><button id="closeButton" class="btn btn-sm btn-danger close-sidebar-button">×</button>
+        <div class="chat-messages mb-3">
+          <!-- Messages will be displayed here -->
+          <div class="system-message pt-5"></div>
+          <!--
+          <p><b>System Message: Doctor G is ready to assist you.</b> Not sure what to ask? Here are some questions to get the conversation started:</p>
+          <ul>
+            <li>
+                Should I stay or should I Go?
+            </li>
+            <li>
+                My partner doesn't believe in Covid vaccination and refuses to get one. Do I have the right to insist that he's vaccinated?
+            </li>
+            <li>
+                How can I disagree with my partner in a way that they don't take personally?
+            </li>
+            <li>
+                My partner made a video to promote his couples therapy app and he shares our private conversations with the therapist in the commercial he made. How do I ask him to take that down?
+            </li>
+
+          </ul>
+          -->
+        </div>
+        <div class="input-group chat-box">
+            <input type="text" id="inputBox" class="form-control" placeholder="Type your question" aria-label="Type your question">
+            <button class="btn btn-secondary" id="sendChatMessage" type="button">Send</button>
+        </div>
+    </div>
+    
+    <button type="button" class="chat-toggle start-chatting btn btn-primary float-end">Ask Dr. G</button>
+    <button type="button" class="btn btn-primary" id="hamster-removal">
+    Anxious?
+      </button>
+    
+    
+
+    <!-- jQuery 3.7 and Bootstrap 5 JS -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown.js/0.5.0/markdown.min.js" integrity="sha512-kaDP6dcDG3+X87m9SnhyJzwBMKrYnd2tLJjGdBrZ9yEL8Zcl2iJRsPwylLkbd2g3QC5S8efV3sgwI5r73U0HnA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    
+    <!-- Main Javascript for the page... must be loaded last -->
+    <script src="js/lovegpt.js"></script>
+
+</body>
+
+</html>

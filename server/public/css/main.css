@@ -1,0 +1,135 @@
+/* Typography */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat&display=swap');
+
+body {
+    font-family: 'Montserrat', sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 700;
+}
+
+/* Colors & Theme */
+:root {
+    /* HEX format */
+    --bs-primary: #887af9;  /* Soft purple for primary actions */
+    --bs-secondary: #272b30;  /* Dark grey for secondary items */
+    --bs-accent: #f5a623;  /* Warm orange for highlights and accents */
+    --bs-dark: #f7f8fc;  /* Light grey (for text on dark backgrounds) */
+    --bs-light: #2e3238;  /* Slightly lighter than the background, for card surfaces, modals etc. */
+    --bs-success: #2dce89;  /* Green for success states */
+    --bs-danger: #f5365c;  /* Red for errors */
+
+    /* RGB format */
+    --bs-primary-rgb: 136, 122, 249;
+    --bs-secondary-rgb: 39, 43, 48;
+    --bs-accent-rgb: 245, 166, 35;
+    --bs-dark-rgb: 247, 248, 252;
+    --bs-light-rgb: 46, 50, 56;
+    --bs-success-rgb: 45, 206, 137;
+    --bs-danger-rgb: 245, 54, 92;
+}
+
+body {
+    background-color: var(--bs-secondary);
+    color: var(--bs-dark);
+}
+
+a {
+    color: var(--bs-accent);
+    transition: color 0.2s ease-in-out;
+}
+
+a:hover, a:focus {
+    color: var(--bs-primary);
+}
+
+.btn-primary {
+    background-color: var(--bs-primary);
+    border-color: var(--bs-primary);
+    color: var(--bs-dark);
+}
+
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--bs-accent);
+    border-color: var(--bs-accent);
+}
+
+.card {
+    background-color: var(--bs-light);
+    border: 1px solid rgba(var(--bs-dark-rgb), 0.1);
+    border-radius: 0.25rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+/* Positive background */
+.bg-positive {
+    background-color: #007E33; /* Green */
+    color: white;
+  }
+  
+  /* Negative background */
+  .bg-negative {
+    background-color: #D32F2F; /* Red */
+    color: white;
+  }
+  
+  /* Neutral background */
+  .bg-neutral {
+    background-color: #455A64; /* Gray */
+    color: white;
+  }
+
+  /* Use this to position below the fixed topnav */
+  .clear-topnav {
+    padding-top:70px;
+  }
+  
+  .fixed-tabs {
+    left:10px;right:10px;position:fixed;z-index: 1000;
+  }
+
+
+
+
+  .chat-messages {
+    height: calc(100% - 60px);
+    overflow-y: auto;
+  }
+  .sidebar-container {
+    width: 100%;
+    max-width:600px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    overflow-y: auto;
+    padding: 1rem;
+    color: white;
+    font-size: 13px;
+    display: none;
+    z-index:2000
+  }
+
+  .open-sidebar-button, .start-chatting {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    z-index: 1000;
+  }
+
+  .close-sidebar-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 3000;
+  }
+
+  /* anxiety CTA that floats lower left */
+  #hamster-removal {
+    position: fixed; bottom: 10px; left: 10px; z-index: 999;
+  }
+
+  .query-suggestion {
+    color:#2dce89;
+    cursor: pointer
+  }
