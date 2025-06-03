@@ -1,7 +1,14 @@
 const { Configuration, OpenAIApi } = require('openai');
 
+
+/* Get config from environment variables or use reasonable defaults */
+const API_KEY = process.env.OPENAI_API_KEY || ''
+const API_ENDPOINT= process.env.OPENAI_API_ENDPOINT || "https://api.openai.com/v1/"
+const MODEL = process.env.LOVEGPT_MODEL || "gpt-4.1"
+
 const configuration = new Configuration({
-    apiKey: process.env.OPENAI_API_KEY // Replace with your actual OpenAI API key
+    apiKey: API_KEY,
+    baseURL: API_ENDPOINT 
 });
 
 //requests a big-picture summary based on the results of the message-by-message analysis
@@ -149,9 +156,8 @@ async function analyzeConversation(conversationText) {
 
     // The app will function with cheaper models such as gpt-4o, however the qua;ity of the advice is better with gpt-4.1
     const response = await openai.createChatCompletion({
-        model: 'gpt-4.1',
+        model: LOVEGPT_MODEL,
         messages: messages,
-        max_tokens: 2500,
         temperature: 0.5
     });
 
