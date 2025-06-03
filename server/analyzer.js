@@ -146,8 +146,10 @@ async function analyzeConversation(conversationText) {
 
     //const messages = [...trainingData, {role:"user", content: promptTemplate}]
     const messages = [{role:'system', content: systemInstruction},{role:"user", content: promptTemplate}]
+
+    // The app will function with cheaper models such as gpt-4o, however the qua;ity of the advice is better with gpt-4.1
     const response = await openai.createChatCompletion({
-        model: 'gpt-4',
+        model: 'gpt-4.1',
         messages: messages,
         max_tokens: 2500,
         temperature: 0.5
