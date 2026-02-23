@@ -70,6 +70,7 @@ from .parsers import (
     parse_csv,
     parse_json,
     parse_list,
+    parse_llm,
     parse_plain,
     parse_slack_json,
     parse_telegram,
@@ -95,6 +96,7 @@ __all__ = [
     "parse_json",
     "parse_csv",
     "parse_list",
+    "parse_llm",
     # Dynamics
     "compute_dynamics",
     "compute_valence_momentum",
