@@ -9,8 +9,14 @@ Demonstrates:
 - Reading the conversation summary and recommendations
 - Using the dynamics engine for advanced insights
 
-Run with:
-    ANTHROPIC_API_KEY=<your-key> python examples/basic_usage.py
+Supported providers (auto-detected from environment variables):
+    ANTHROPIC_API_KEY    → Claude  (claude-opus-4-6 by default)
+    OPENROUTER_API_KEY   → OpenRouter  (openai/gpt-5.2 by default)
+    OPENAI_API_KEY       → OpenAI  (gpt-4o by default)
+
+Override the model without changing code:
+    LLM_MODEL=google/gemini-2.5-pro OPENROUTER_API_KEY=... python examples/basic_usage.py
+    LLM_MODEL=claude-haiku-4-5-20251001 ANTHROPIC_API_KEY=... python examples/basic_usage.py
 
 Optional: pip install rich  (for prettier output)
 """
@@ -31,11 +37,11 @@ from emotion_analysis import (
     parse_transcript,
     speaker_influence_score,
 )
+from emotion_analysis.backends import auto_detect_backend
 from emotion_analysis.models import ConversationDomain
 
 try:
     from rich import print as rprint
-    from rich.panel import Panel
     from rich.table import Table
     from rich import box
     HAS_RICH = True
@@ -56,25 +62,31 @@ def load_sample() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Display helpers
+# Provider / key detection
 # ---------------------------------------------------------------------------
 
-VALENCE_BARS = {
-    range(-100, -60): "▓▓▓▓▓ very negative",
-    range(-60, -20):  "▓▓▓░░ negative",
-    range(-20, 20):   "░░░░░ neutral",
-    range(20, 60):    "░░▓▓▓ positive",
-    range(60, 101):   "▓▓▓▓▓ very positive",
-}
+def check_keys() -> None:
+    """Exit with a helpful message if no API key is configured."""
+    has_key = any(
+        os.environ.get(k)
+        for k in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+    )
+    if not has_key:
+        print(
+            "Error: no API key found.\n"
+            "Set one of:\n"
+            "  ANTHROPIC_API_KEY   — for Claude\n"
+            "  OPENROUTER_API_KEY  — for OpenRouter (openai/gpt-5.2 default)\n"
+            "  OPENAI_API_KEY      — for OpenAI directly\n"
+            "\n"
+            "Override the model with:  LLM_MODEL=<model-id>"
+        )
+        sys.exit(1)
 
 
-def valence_label(v: float) -> str:
-    pct = int(v * 100)
-    for r, label in VALENCE_BARS.items():
-        if pct in r:
-            return label
-    return "neutral"
-
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
 
 def sentiment_color(s: str) -> str:
     return {"positive": "green", "negative": "red", "neutral": "yellow"}.get(s, "white")
@@ -92,12 +104,15 @@ def print_section(title: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Error: ANTHROPIC_API_KEY environment variable is not set.")
-        sys.exit(1)
+    check_keys()
+
+    # Resolve which backend will be used and show it upfront
+    model_override = os.environ.get("LLM_MODEL")
+    backend = auto_detect_backend(model=model_override)
 
     print_section("emotion_analysis — demo")
-    print(f"Loading transcript: {SAMPLE_PATH.name}")
+    print(f"Backend : {backend!r}")
+    print(f"Transcript: {SAMPLE_PATH.name}")
 
     # ----- Parse -----
     transcript = parse_transcript(
@@ -112,7 +127,7 @@ def main() -> None:
 
     # ----- Analyse -----
     print("\nRunning analysis (2 API calls)...")
-    analyzer = EmotionAnalyzer(include_dynamics_narrative=False)
+    analyzer = EmotionAnalyzer(backend=backend, include_dynamics_narrative=False)
     analysis = analyzer.analyze(transcript)
 
     # ----- Per-message table -----
