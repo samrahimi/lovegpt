@@ -7,17 +7,26 @@ ConversationTranscript and returns a full ConversationAnalysis, including:
   - a conversation-level summary with themes, patterns, and recommendations
   - computed emotional dynamics (trajectories, reactivity, turning points, etc.)
 
-All LLM calls go through the Anthropic SDK.  The model is configurable.
+LLM provider is configurable via the ``backend`` parameter — any backend that
+implements ``complete(system, user) -> str`` is accepted.  Built-in backends:
+  AnthropicBackend  — Anthropic Messages API (default when ANTHROPIC_API_KEY set)
+  OpenAIBackend     — any OpenAI-compatible endpoint (default when OPENROUTER_API_KEY set)
+
+When no backend is supplied, auto_detect_backend() picks one from env vars.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-import anthropic
-
+from .backends import (
+    AnthropicBackend,
+    LLMBackend,
+    OpenAIBackend,
+    auto_detect_backend,
+)
 from .dynamics import compute_dynamics
 from .models import (
     AnnotatedMessage,
@@ -38,8 +47,6 @@ from .prompts import (
 
 logger = logging.getLogger(__name__)
 
-# Default model — can be overridden per-instance or per-call
-DEFAULT_MODEL = "claude-opus-4-6"
 DEFAULT_MAX_TOKENS = 8192
 
 
@@ -53,36 +60,72 @@ class EmotionAnalyzer:
 
     Parameters
     ----------
+    backend:
+        How to reach an LLM.  Three forms are accepted:
+
+        * ``None`` (default) — auto-detect from environment variables
+          (ANTHROPIC_API_KEY → Claude, OPENROUTER_API_KEY → OpenRouter,
+          OPENAI_API_KEY → OpenAI).
+        * A string shortcut: ``"anthropic"`` or ``"openai"``.
+        * An ``LLMBackend`` instance (``AnthropicBackend``, ``OpenAIBackend``,
+          or any custom object with a ``complete(system, user) -> str`` method).
+
     api_key:
-        Anthropic API key.  Falls back to the ``ANTHROPIC_API_KEY`` env var if
-        not provided.
+        API key forwarded to the auto-detected or shortcut backend.  Ignored
+        when a fully-configured backend instance is passed.
     model:
-        Claude model ID to use.  Defaults to ``claude-opus-4-6``.
+        Model ID forwarded to the auto-detected or shortcut backend.
     max_tokens:
         Token budget for each LLM call.
     include_dynamics_narrative:
         If True, a third LLM call generates a natural-language interpretation of
-        the computed dynamics (turning points, reactivity).  Useful for display;
-        can be skipped to reduce latency and cost.
+        the computed dynamics (turning points, reactivity).
     client:
-        Optionally pass a pre-configured ``anthropic.Anthropic`` client (useful
-        for testing or custom retry policies).
+        Pre-configured SDK client (``anthropic.Anthropic`` or ``openai.OpenAI``).
+        When supplied, it is wrapped in the appropriate backend automatically.
+
+    Examples
+    --------
+    Auto-detect (recommended)::
+
+        analyzer = EmotionAnalyzer()
+
+    Explicit Anthropic::
+
+        analyzer = EmotionAnalyzer(backend="anthropic", model="claude-haiku-4-5-20251001")
+
+    OpenRouter with a specific model::
+
+        analyzer = EmotionAnalyzer(backend="openai", model="google/gemini-2.5-pro")
+
+    Ollama (local)::
+
+        from emotion_analysis.backends import OpenAIBackend
+        backend = OpenAIBackend(
+            base_url="http://localhost:11434/v1",
+            model="llama3.2",
+            api_key="ollama",
+        )
+        analyzer = EmotionAnalyzer(backend=backend)
     """
 
     def __init__(
         self,
+        backend: Union[str, LLMBackend, None] = None,
+        *,
         api_key: Optional[str] = None,
-        model: str = DEFAULT_MODEL,
+        model: Optional[str] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         include_dynamics_narrative: bool = False,
-        client: Optional[anthropic.Anthropic] = None,
+        # Legacy convenience: pass a pre-built SDK client
+        client: Optional[Any] = None,
     ) -> None:
-        self.model = model
-        self.max_tokens = max_tokens
         self.include_dynamics_narrative = include_dynamics_narrative
-        self._client = client or anthropic.Anthropic(
-            **({"api_key": api_key} if api_key else {})
+        self._backend = self._resolve_backend(
+            backend, api_key=api_key, model=model,
+            max_tokens=max_tokens, client=client,
         )
+        logger.debug("EmotionAnalyzer ready: backend=%r", self._backend)
 
     # ------------------------------------------------------------------
     # Public API
@@ -100,17 +143,16 @@ class EmotionAnalyzer:
         Steps
         -----
         1. LLM call: annotate every message with emotion vectors.
-        2. Compute emotional dynamics from the annotations (pure Python — no LLM).
+        2. Compute emotional dynamics (pure Python, no LLM).
         3. LLM call: generate a high-level narrative summary.
-        4. (Optional) LLM call: generate natural-language dynamics narrative.
+        4. (Optional) LLM call: natural-language dynamics narrative.
 
         Parameters
         ----------
         transcript:
             The conversation to analyse.
         include_dynamics_narrative:
-            Override instance default for whether to generate a narrative
-            interpretation of the computed dynamics.
+            Override the instance-level setting.
 
         Returns
         -------
@@ -123,27 +165,19 @@ class EmotionAnalyzer:
         )
 
         logger.info(
-            "Analysing transcript with %d messages, domain=%s",
+            "Analysing transcript with %d messages, domain=%s, backend=%r",
             len(transcript.messages),
             transcript.domain.value,
+            self._backend,
         )
 
-        # Step 1: per-message annotation
         annotated = self._annotate_messages(transcript)
-
-        # Step 2: compute dynamics (no LLM)
         dynamics = compute_dynamics(annotated, transcript.participants)
-
-        # Step 3: conversation-level summary
         summary = self._generate_summary(transcript, annotated)
 
-        # Step 4: optional dynamics narrative
         if do_narrative and (dynamics.turning_points or dynamics.reactivity_events):
-            narrative = self._generate_dynamics_narrative(
+            self._generate_dynamics_narrative(
                 transcript, dynamics.turning_points, dynamics.reactivity_events
-            )
-            dynamics = dynamics.model_copy(
-                update={"_narrative": narrative}  # stored as private attr if desired
             )
 
         return ConversationAnalysis(
@@ -159,23 +193,57 @@ class EmotionAnalyzer:
         """Expose just the message-level annotation step (no dynamics/summary)."""
         return self._annotate_messages(transcript)
 
+    @property
+    def backend(self) -> LLMBackend:
+        """The active LLM backend."""
+        return self._backend
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _call(self, user_prompt: str, system: str = SYSTEM_PROMPT) -> str:
-        """Make a single Anthropic API call and return the text content."""
-        response = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user_prompt}],
+    @staticmethod
+    def _resolve_backend(
+        backend: Union[str, LLMBackend, None],
+        *,
+        api_key: Optional[str],
+        model: Optional[str],
+        max_tokens: int,
+        client: Optional[Any],
+    ) -> LLMBackend:
+        if isinstance(backend, LLMBackend):
+            return backend
+
+        if backend is None:
+            return auto_detect_backend(
+                api_key=api_key, model=model,
+                max_tokens=max_tokens, client=client,
+            )
+
+        if backend == "anthropic":
+            return AnthropicBackend(
+                api_key=api_key,
+                model=model or AnthropicBackend.DEFAULT_MODEL,
+                max_tokens=max_tokens,
+                client=client,
+            )
+
+        if backend in ("openai", "openrouter"):
+            return OpenAIBackend(
+                api_key=api_key,
+                model=model or OpenAIBackend.DEFAULT_MODEL,
+                max_tokens=max_tokens,
+            )
+
+        raise ValueError(
+            f"Unknown backend string {backend!r}. "
+            "Use 'anthropic', 'openai', or pass an LLMBackend instance."
         )
-        return response.content[0].text
+
+    def _call(self, user_prompt: str, system: str = SYSTEM_PROMPT) -> str:
+        return self._backend.complete(system, user_prompt)
 
     def _parse_json(self, raw: str, context: str = "") -> Any:
-        """Extract and parse JSON from a model response, with error context."""
-        # Strip markdown code fences if present
         text = raw.strip()
         if text.startswith("```"):
             lines = text.splitlines()
@@ -191,7 +259,6 @@ class EmotionAnalyzer:
     def _annotate_messages(
         self, transcript: ConversationTranscript
     ) -> List[AnnotatedMessage]:
-        """Call the LLM to annotate every message with emotion vectors."""
         prompt = build_annotation_prompt(
             messages=transcript.messages,
             domain=transcript.domain,
@@ -207,15 +274,16 @@ class EmotionAnalyzer:
                 "Expected a list of annotations; got: " + repr(type(annotations_raw))
             )
 
-        # Build a quick lookup from the transcript
         msg_by_index = {m.turn_index: m for m in transcript.messages}
-
         annotated: List[AnnotatedMessage] = []
+
         for item in annotations_raw:
             turn_index = item.get("turn_index")
             msg = msg_by_index.get(turn_index)
             if msg is None:
-                logger.warning("Annotation references unknown turn_index=%r — skipping", turn_index)
+                logger.warning(
+                    "Annotation references unknown turn_index=%r — skipping", turn_index
+                )
                 continue
 
             emotion_raw = item.get("emotion", {})
@@ -275,7 +343,6 @@ class EmotionAnalyzer:
         transcript: ConversationTranscript,
         annotated: List[AnnotatedMessage],
     ) -> ConversationSummary:
-        """Generate the high-level narrative summary."""
         transcript_block = _format_transcript(transcript.messages)
         annotations_json = json.dumps(
             [
@@ -318,7 +385,6 @@ class EmotionAnalyzer:
         turning_points: list,
         reactivity_events: list,
     ) -> str:
-        """Generate an optional natural-language narrative about dynamics."""
         transcript_block = _format_transcript(transcript.messages)
         tp_json = json.dumps(
             [tp.model_dump(exclude_none=True) for tp in turning_points], indent=2
