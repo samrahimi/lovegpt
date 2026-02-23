@@ -43,6 +43,7 @@ Everything else (prompts, internal helpers) lives in the sub-modules.
 """
 
 from .analyzer import AnalysisError, EmotionAnalyzer
+from .backends import AnthropicBackend, LLMBackend, OpenAIBackend, auto_detect_backend
 from .dynamics import (
     compute_dynamics,
     compute_repair_attempts,
@@ -80,6 +81,11 @@ __all__ = [
     # Analyser
     "EmotionAnalyzer",
     "AnalysisError",
+    # Backends
+    "LLMBackend",
+    "AnthropicBackend",
+    "OpenAIBackend",
+    "auto_detect_backend",
     # Parsers
     "parse_transcript",
     "parse_plain",
