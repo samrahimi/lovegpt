@@ -36,7 +36,7 @@ designed for therapy, business, politics, medical, legal, and general use.
 emotion_analysis/
 ├── __init__.py     Public API surface (re-exports everything a caller needs)
 ├── models.py       Pydantic data models
-├── parsers.py      Transcript parsers (6 formats)
+├── parsers.py      Transcript parsers (7 deterministic formats + LLM fallback)
 ├── prompts.py      Claude/LLM prompt templates
 ├── analyzer.py     LLM orchestration — EmotionAnalyzer class
 ├── backends.py     LLM provider abstraction layer
@@ -71,7 +71,14 @@ Optional third call: natural-language interpretation of dynamics findings.
 
 ### Supported transcript formats
 `plain` (Speaker: message), `whatsapp`, `telegram`, `slack` (JSON),
-`json` (configurable fields), `csv` (configurable columns), `list` (Python dicts)
+`json` (configurable fields), `csv` (configurable columns), `list` (Python dicts),
+`llm` / `auto` (LLM-based fallback for any unrecognised format)
+
+**LLM-based parser (`parse_llm` / `format="llm"`):**
+- Requires `OPENROUTER_API_KEY`; uses `google/gemini-3-flash-preview` by default
+- Accepts a `format_hint` kwarg to guide the model (e.g. `"Discord DM export"`)
+- Detected format stored in `transcript.metadata["llm_detected_format"]`
+- Normalises speaker names, strips formatting artifacts, parses timestamps
 
 ### Supported conversation domains
 `THERAPY`, `ROMANTIC`, `FAMILY`, `FRIENDSHIP`, `BUSINESS`, `POLITICAL`,
@@ -109,10 +116,10 @@ Mistral, Ollama, LM Studio, vLLM, Azure.
 
 ## Tests
 
-`tests/` — 79 tests, all passing, zero API calls required.
+`tests/` — 89 tests, all passing, zero API calls required.
 
 ```
-tests/test_parsers.py    — parser correctness + model unit tests
+tests/test_parsers.py    — parser correctness + model unit tests + parse_llm (mocked)
 tests/test_dynamics.py   — dynamics algorithms (math + integration)
 tests/test_backends.py   — backend wiring, env var detection, SDK mocking
 ```
@@ -131,7 +138,8 @@ All scripts support any provider via env vars.  `LLM_MODEL` overrides the model.
 | `examples/multi_domain_demo.py` | Side-by-side comparison of 3 domains |
 | `examples/openrouter_smoke_test.py` | Live integration test for OpenRouter |
 
-Run any of them:
+All scripts support any provider via env vars.  `LLM_MODEL` overrides the model.
+
 ```bash
 ANTHROPIC_API_KEY=...   python examples/basic_usage.py
 OPENROUTER_API_KEY=...  python examples/basic_usage.py

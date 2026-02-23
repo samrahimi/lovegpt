@@ -223,3 +223,152 @@ def test_emotion_vector_dominant_basic():
         label="angry", anger=0.9, fear=0.2
     )
     assert v.dominant_basic_emotion() == "anger"
+
+
+# ---------------------------------------------------------------------------
+# parse_llm
+# ---------------------------------------------------------------------------
+
+import json as _json
+from unittest.mock import MagicMock, patch
+
+
+def _mock_openai_llm_response(messages: list) -> MagicMock:
+    """Build a mock openai.OpenAI client whose chat.completions.create returns
+    a response containing a JSON string with the given messages list."""
+    payload = _json.dumps({
+        "detected_format": "custom test format",
+        "messages": messages,
+    })
+    choice = MagicMock()
+    choice.message.content = payload
+    client = MagicMock()
+    client.chat.completions.create.return_value.choices = [choice]
+    return client
+
+
+def test_parse_llm_basic(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [
+        {"speaker": "Alice", "text": "Hello!", "timestamp": None},
+        {"speaker": "Bob", "text": "Hi there.", "timestamp": None},
+    ]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        from emotion_analysis.parsers import parse_llm
+        t = parse_llm("some weird text")
+    assert len(t.messages) == 2
+    assert t.messages[0].speaker == "Alice"
+    assert t.messages[1].text == "Hi there."
+
+
+def test_parse_llm_timestamps_parsed(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [
+        {"speaker": "Alice", "text": "Hey", "timestamp": "2024-07-12T14:35:00"},
+    ]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        from emotion_analysis.parsers import parse_llm
+        t = parse_llm("raw text")
+    from datetime import datetime
+    assert isinstance(t.messages[0].timestamp, datetime)
+
+
+def test_parse_llm_no_key_raises(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from emotion_analysis.parsers import parse_llm
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        parse_llm("some text")
+
+
+def test_parse_llm_skips_empty_messages(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [
+        {"speaker": "Alice", "text": "Hello", "timestamp": None},
+        {"speaker": "Bob", "text": "",       "timestamp": None},  # should be dropped
+        {"speaker": "Alice", "text": "Bye",  "timestamp": None},
+    ]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        from emotion_analysis.parsers import parse_llm
+        t = parse_llm("raw")
+    assert len(t.messages) == 2
+
+
+def test_parse_llm_detected_format_in_metadata(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [{"speaker": "A", "text": "Hi", "timestamp": None}]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        from emotion_analysis.parsers import parse_llm
+        t = parse_llm("raw text")
+    assert t.metadata.get("llm_detected_format") == "custom test format"
+    assert "llm_parse_model" in t.metadata
+
+
+def test_parse_llm_strips_code_fences(monkeypatch):
+    """Model wraps JSON in ```json ... ``` — we should still parse it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    payload = _json.dumps({
+        "detected_format": "plain",
+        "messages": [{"speaker": "X", "text": "hello", "timestamp": None}],
+    })
+    fenced = f"```json\n{payload}\n```"
+    choice = MagicMock()
+    choice.message.content = fenced
+    client_mock = MagicMock()
+    client_mock.chat.completions.create.return_value.choices = [choice]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = client_mock
+        from emotion_analysis.parsers import parse_llm
+        t = parse_llm("raw")
+    assert len(t.messages) == 1
+    assert t.messages[0].speaker == "X"
+
+
+def test_parse_llm_bad_json_raises(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    choice = MagicMock()
+    choice.message.content = "this is not json at all"
+    client_mock = MagicMock()
+    client_mock.chat.completions.create.return_value.choices = [choice]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = client_mock
+        from emotion_analysis.parsers import parse_llm
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            parse_llm("raw")
+
+
+def test_parse_llm_format_hint_included_in_prompt(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [{"speaker": "A", "text": "Hi", "timestamp": None}]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        from emotion_analysis.parsers import parse_llm
+        parse_llm("raw", format_hint="Discord server log")
+    # Verify the format hint was included in the user prompt
+    call_args = mock_cls.return_value.chat.completions.create.call_args
+    messages_sent = call_args.kwargs["messages"]
+    user_content = messages_sent[1]["content"]
+    assert "Discord server log" in user_content
+
+
+def test_parse_transcript_llm_alias(monkeypatch):
+    """parse_transcript(format='llm') should route to parse_llm."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [{"speaker": "Alice", "text": "Hello", "timestamp": None}]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        t = parse_transcript("raw text", format="llm")
+    assert t.messages[0].speaker == "Alice"
+
+
+def test_parse_transcript_auto_alias(monkeypatch):
+    """parse_transcript(format='auto') is an alias for 'llm'."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test-key")
+    mock_messages = [{"speaker": "Bob", "text": "Hey", "timestamp": None}]
+    with patch("openai.OpenAI") as mock_cls:
+        mock_cls.return_value = _mock_openai_llm_response(mock_messages)
+        t = parse_transcript("raw text", format="auto")
+    assert t.messages[0].speaker == "Bob"

@@ -10,6 +10,8 @@ Supported formats:
   - json       Generic JSON array with configurable field names
   - csv        CSV with configurable column names
   - list       Python list of dicts (programmatic use)
+  - llm / auto LLM-based parser for any unsupported or ambiguous format
+               (requires OPENROUTER_API_KEY; uses google/gemini-3-flash-preview)
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -367,6 +370,206 @@ def parse_list(
 
 
 # ---------------------------------------------------------------------------
+# LLM-based fallback parser
+# ---------------------------------------------------------------------------
+
+LLM_PARSE_MODEL = "google/gemini-3-flash-preview"
+LLM_PARSE_BASE_URL = "https://openrouter.ai/api/v1"
+
+_LLM_SYSTEM = (
+    "You are a transcript parser. Extract conversational turns from raw text "
+    "and return them as structured JSON. "
+    "Output ONLY valid JSON — no commentary, no markdown fences."
+)
+
+_LLM_USER_TEMPLATE = """\
+Extract all conversational turns from the text below.
+{hint_block}
+Return a JSON object with this exact schema:
+{{
+  "detected_format": "<brief description of the source format, e.g. 'iMessage export', 'Discord log', 'email thread'>",
+  "messages": [
+    {{
+      "speaker": "<normalized speaker name>",
+      "text": "<message content, cleaned of formatting artifacts>",
+      "timestamp": "<ISO 8601 string, e.g. 2024-07-12T14:35:00, or null>"
+    }}
+  ]
+}}
+
+Rules:
+1. Include ONLY actual conversational messages from participants.
+   Skip system notifications (e.g. "X joined the group", "missed call",
+   "end-to-end encrypted", delivery/read receipts) and standalone metadata lines.
+2. Normalize speaker names — use the same display name consistently even if the
+   source uses usernames, phone numbers, abbreviations, or role labels.
+3. Strip formatting artifacts from the text field (embedded timestamps, emoji
+   reactions, edit/delete markers, etc.).
+4. Preserve the original message order exactly.
+5. Timestamps: if clearly present and parseable, format as ISO 8601; otherwise null.
+6. If a speaker cannot be determined for a message, use "Unknown".
+
+Source text:
+---
+{text}
+---"""
+
+
+def parse_llm(
+    text: str,
+    *,
+    api_key: Optional[str] = None,
+    model: str = LLM_PARSE_MODEL,
+    base_url: str = LLM_PARSE_BASE_URL,
+    format_hint: Optional[str] = None,
+    domain: ConversationDomain = ConversationDomain.GENERAL,
+    context_note: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> ConversationTranscript:
+    """
+    Parse a transcript in *any* format by delegating structure-extraction to an LLM.
+
+    Use this when the source text is in a format not covered by the deterministic
+    parsers — e.g. iMessage screenshots described as text, custom forum exports,
+    email threads, proprietary chat logs, or any other layout where speaker turns
+    are discernible but the format is non-standard.
+
+    Requires ``OPENROUTER_API_KEY`` to be set (or passed via ``api_key``).
+    Uses ``google/gemini-3-flash-preview`` via OpenRouter by default — a fast,
+    cheap model well-suited to structured extraction tasks.
+
+    Parameters
+    ----------
+    text:
+        Raw transcript text in any format.
+    api_key:
+        OpenRouter API key.  Falls back to the ``OPENROUTER_API_KEY`` env var.
+    model:
+        Model to use for parsing.  Default: ``google/gemini-3-flash-preview``.
+    base_url:
+        API base URL.  Default: ``https://openrouter.ai/api/v1`` (OpenRouter).
+    format_hint:
+        Optional free-text hint about the source format, e.g.
+        ``"Discord server export"`` or ``"iMessage thread between two people"``.
+        Helps the model avoid common mis-classifications.
+    domain:
+        Conversation domain attached to the returned transcript.
+    context_note:
+        Optional free-text context about the conversation.
+    metadata:
+        Arbitrary key-value pairs attached to the transcript.
+
+    Returns
+    -------
+    ConversationTranscript
+
+    Raises
+    ------
+    ValueError
+        If no API key is available.
+    RuntimeError
+        If the model response cannot be parsed as valid JSON.
+
+    Examples
+    --------
+    ::
+
+        # Any weird format — let the model figure it out
+        raw = open("mystery_chat.txt").read()
+        transcript = parse_llm(raw, format_hint="exported from a private forum")
+
+        # Via the unified entry point
+        transcript = parse_transcript(raw, format="llm",
+                                      format_hint="iMessage export")
+    """
+    try:
+        import openai  # deferred — only required for this parser
+    except ImportError as exc:
+        raise ImportError(
+            "The 'openai' package is required for parse_llm(). "
+            "Install it with: pip install openai"
+        ) from exc
+
+    resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if not resolved_key:
+        raise ValueError(
+            "parse_llm() requires an OpenRouter API key. "
+            "Set OPENROUTER_API_KEY or pass api_key= explicitly."
+        )
+
+    client = openai.OpenAI(api_key=resolved_key, base_url=base_url)
+
+    hint_block = (
+        f'Format hint from caller: "{format_hint}"\n\n' if format_hint else ""
+    )
+    user_prompt = _LLM_USER_TEMPLATE.format(
+        hint_block=hint_block, text=text.strip()
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": _LLM_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    raw_output = (response.choices[0].message.content or "").strip()
+
+    # Strip markdown code fences if the model wraps the output
+    if raw_output.startswith("```"):
+        lines = raw_output.splitlines()
+        raw_output = "\n".join(
+            lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+        )
+
+    try:
+        parsed = json.loads(raw_output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"LLM parser returned output that is not valid JSON.\n"
+            f"Model: {model}\n"
+            f"Raw output (first 500 chars):\n{raw_output[:500]}"
+        ) from exc
+
+    detected = parsed.get("detected_format", "unknown")
+    messages_raw: List[Dict[str, Any]] = parsed.get("messages", [])
+    if not isinstance(messages_raw, list):
+        raise RuntimeError(
+            f"LLM parser returned unexpected structure — "
+            f"'messages' field is {type(messages_raw).__name__}, expected list."
+        )
+
+    rows: List[Dict[str, Any]] = []
+    for item in messages_raw:
+        speaker = str(item.get("speaker") or "Unknown").strip()
+        msg_text = str(item.get("text") or "").strip()
+        if not msg_text:
+            continue
+        ts: Optional[datetime] = None
+        ts_raw = item.get("timestamp")
+        if ts_raw and ts_raw != "null":
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+            ):
+                try:
+                    ts = datetime.strptime(str(ts_raw), fmt)
+                    break
+                except ValueError:
+                    pass
+        rows.append({"speaker": speaker, "text": msg_text, "timestamp": ts})
+
+    meta = dict(metadata or {})
+    meta["llm_detected_format"] = detected
+    meta["llm_parse_model"] = model
+
+    return _build_transcript(rows, domain, context_note, meta)
+
+
+# ---------------------------------------------------------------------------
 # Unified entry point
 # ---------------------------------------------------------------------------
 
@@ -381,6 +584,8 @@ _FORMAT_MAP = {
     "json": parse_json,
     "csv": parse_csv,
     "list": parse_list,
+    "llm": parse_llm,
+    "auto": parse_llm,   # alias: "I don't know the format, figure it out"
 }
 
 
@@ -401,8 +606,25 @@ def parse_transcript(
     source:
         Raw text string, a file path (``Path``), or a list of dicts.
     format:
-        One of: ``plain``, ``whatsapp``, ``telegram``, ``slack``,
-        ``json``, ``csv``, ``list``.
+        One of:
+
+        ============  ====================================================
+        ``plain``     ``"Speaker: message"`` line-by-line (default)
+        ``whatsapp``  WhatsApp chat export
+        ``telegram``  Telegram text export
+        ``slack``     Slack JSON export
+        ``json``      Generic JSON array (configurable field names)
+        ``csv``       CSV (configurable column names)
+        ``list``      Python list of dicts
+        ``llm``       LLM-based parser for unsupported/ambiguous formats
+        ``auto``      Alias for ``llm``
+        ============  ====================================================
+
+        The ``llm`` / ``auto`` formats require ``OPENROUTER_API_KEY`` and
+        use ``google/gemini-3-flash-preview`` by default.  Pass
+        ``api_key=``, ``model=``, or ``format_hint=`` via ``**kwargs``
+        to customise.
+
     domain:
         Conversational domain for context-aware analysis.
     context_note:
@@ -410,7 +632,13 @@ def parse_transcript(
     metadata:
         Arbitrary key-value pairs attached to the transcript.
     **kwargs:
-        Forwarded to the specific parser (e.g. ``separator``, ``speaker_col``).
+        Forwarded to the specific parser.  Common options:
+
+        - ``separator`` (plain) — field separator, default ``":"``
+        - ``speaker_col`` / ``text_col`` (csv) — column names
+        - ``speaker_field`` / ``text_field`` (json/list) — field names
+        - ``user_map`` (slack) — ``{user_id: display_name}`` mapping
+        - ``api_key`` / ``model`` / ``format_hint`` (llm/auto)
 
     Returns
     -------
@@ -419,15 +647,14 @@ def parse_transcript(
     fmt = format.lower()
     if fmt not in _FORMAT_MAP:
         raise ValueError(
-            f"Unknown format {format!r}. Choose from: {', '.join(_FORMAT_MAP)}"
+            f"Unknown format {format!r}. "
+            f"Choose from: {', '.join(sorted(set(_FORMAT_MAP)))}"
         )
 
-    # Auto-read file paths
+    # Auto-read file paths — all text-based formats (including llm/auto) get str
     if isinstance(source, Path):
         if fmt in ("json", "slack"):
             source = json.loads(source.read_text(encoding="utf-8"))
-        elif fmt == "csv":
-            source = source.read_text(encoding="utf-8")
         else:
             source = source.read_text(encoding="utf-8")
 
