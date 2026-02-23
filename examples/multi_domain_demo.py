@@ -2,10 +2,15 @@
 """
 Multi-domain demo: run the same analysis pipeline across three different
 conversation types (therapy, business negotiation, political debate) and
-compare their dynamics profiles.
+compare their dynamics profiles side by side.
 
-Run with:
-    ANTHROPIC_API_KEY=<your-key> python examples/multi_domain_demo.py
+Supported providers (auto-detected from environment variables):
+    ANTHROPIC_API_KEY    → Claude  (claude-opus-4-6 by default)
+    OPENROUTER_API_KEY   → OpenRouter  (openai/gpt-5.2 by default)
+    OPENAI_API_KEY       → OpenAI  (gpt-4o by default)
+
+Override the model without changing code:
+    LLM_MODEL=google/gemini-2.5-pro OPENROUTER_API_KEY=... python examples/multi_domain_demo.py
 """
 
 import os
@@ -19,6 +24,7 @@ from emotion_analysis import (
     conversation_health_summary,
     parse_transcript,
 )
+from emotion_analysis.backends import auto_detect_backend
 from emotion_analysis.models import ConversationDomain
 
 SAMPLE_DIR = Path(__file__).parent / "sample_conversations"
@@ -52,17 +58,39 @@ def hr(char: str = "─", width: int = 70) -> None:
     print(char * width)
 
 
-def main() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Error: ANTHROPIC_API_KEY environment variable is not set.")
+def check_keys() -> None:
+    has_key = any(
+        os.environ.get(k)
+        for k in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+    )
+    if not has_key:
+        print(
+            "Error: no API key found.\n"
+            "Set one of:\n"
+            "  ANTHROPIC_API_KEY   — for Claude\n"
+            "  OPENROUTER_API_KEY  — for OpenRouter (openai/gpt-5.2 default)\n"
+            "  OPENAI_API_KEY      — for OpenAI directly\n"
+            "\n"
+            "Override the model with:  LLM_MODEL=<model-id>"
+        )
         sys.exit(1)
 
-    analyzer = EmotionAnalyzer()
+
+def main() -> None:
+    check_keys()
+
+    model_override = os.environ.get("LLM_MODEL")
+    backend = auto_detect_backend(model=model_override)
+
+    print(f"Backend : {backend!r}")
+    print(f"Running {len(CONFIGS)} conversations through the full pipeline...\n")
+
+    analyzer = EmotionAnalyzer(backend=backend)
     results = []
 
     for cfg in CONFIGS:
         path = SAMPLE_DIR / cfg["file"]
-        print(f"\n[{cfg['label']}] Parsing and analysing…")
+        print(f"[{cfg['label']}] Parsing and analysing…")
         transcript = parse_transcript(
             path.read_text(encoding="utf-8"),
             format=cfg["format"],
@@ -86,7 +114,6 @@ def main() -> None:
     print(header)
     hr()
 
-    # Collect health dashboards
     dashboards = [(label, conversation_health_summary(a.dynamics)) for label, a in results]
 
     metrics = [
